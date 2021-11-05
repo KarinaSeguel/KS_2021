@@ -1,0 +1,299 @@
+# KS_2021 Script Tankcleaning WWTP start upc250 days
+
+#Load required package
+
+library(ampvis2)
+library(vegan)
+library(ggplot2)
+library(data.table)
+library(patchwork)
+library(forcats)
+library(dplyr)
+library(tidyverse)
+library(reshape2)
+library(openxlsx)
+library(tidyr)
+
+#Select working directory
+setwd("C:/Users/KSeguelSuazo/OneDrive - uantwerpen/Task_Jan/Sequencing_Run")
+
+#make sure that headers are modified to match requirements for phyloseq (sampledata header is 'sample', taxa header is 'taxon',abundances header is 'taxon')
+
+#load data
+sampledata<-read.delim("Metadata_Jan.txt")
+taxa<-read.delim("sintax_cleaned_Jan.txt")
+abundances<-read.delim("otutab.txt")
+
+
+#convert data to ampvis2 object
+
+#merge data
+otutab<-merge(abundances,taxa,by= "OTU")
+
+#create ampvis2 object
+Data<-amp_load(otutable = otutab, metadata = sampledata)
+
+Data_FS <- amp_subset_samples(Data,Scale %in% c('FS'))
+
+#Load required dataset from metadata file (startup)
+Data_Startup<-amp_subset_samples(Data_FS,Startup %in% c("OK"))
+Data_Bio1 <- amp_subset_samples(Data_Startup,Reactor %in% c("Bio1"))
+Data_Bio2 <- amp_subset_samples(Data_Startup,Reactor %in% c("Bio2"))
+
+Data_LabScale <- amp_subset_samples(Data,Reactor %in% c("LabScale"))
+
+#Create Excel tabel
+textmap <- amp_heatmap(Data_Startup ,
+                       group_by = "Datum",
+                       facet_by = "Reactor",
+                       tax_aggregate = "Phylum",
+                       tax_add = "Genus",
+                       tax_show = 9999,
+                       plot_functions = TRUE,
+                       function_data = midasfunctions_20201201,
+                       functions = c("PAO", "GAO", "AOB", "NOB","Filamentous","Aerobic heterotroph"),
+                       textmap = TRUE)
+
+#save file in txt document
+write.table(textmap, file = "Verbeken_FS_Startup.txt",
+            sep = "\t", dec = ",",
+            row.names = TRUE)
+
+
+#Create heatmap presenting top30 microorganisms ordered per day/date
+amp_heatmap(data = Data_Bio1,
+            group_by= "Day",
+             facet_by = "Reactor", #alphabetic order
+            normalise=TRUE,
+            tax_aggregate = "Genus",
+            tax_add = "Phylum",
+            tax_empty="best",
+            
+            tax_show=30, #number of org. 
+            plot_values=TRUE,
+            plot_values_size=3,
+            plot_colorscale = "log10",
+            plot_na = T,
+            color_vector=c("lavenderblush","red3"),
+            round=2) +
+  theme(axis.text.x = element_text(angle = 45, size=18, vjust = 1),
+        axis.text.y = element_text(size=16),
+        legend.position="right")
+
+#Functional groups
+
+PAOs <- c("Tetrasphaera","Dechloromonas","Ca_Accumulibacter")
+
+GAOs <- c("Ca_Competibacter","Defluviicoccus","Propionivibrio","Micropruina")
+
+FB <- c("Acinetobacter", "Leptothrix", "Nocardioides",  "Ca_Alysiosphaera",  "Anaerolinea",  "Beggiatoa", "Ca_Amarolinea",  
+        "Ca_Microthrix", "Ca_Nostocoida",  "Ca_Promineofilum",  "Ca_Sarcinithrix",  "Ca_Villigracilis",  "Fodinicola",  "Gordonia", 
+        "Haliscomenobacter",  "Kouleothrix",  "Leucothrix",  "Neomegalonema",  "Skermania",  "Sphaerotilus",  "Thiothrix",
+        "Turicibacter",  "Trichococcus",  "Collinsella",  "Streptococcus",  "Lactococcus",  "Dietzia",  "Mycobacterium",  "Ca_Defluviicoccus_seviourii",  "midas_s_328",
+        "midas_g_105",  "midas_g_344",  "midas_g_1668",  "midas_g_2111")
+
+# Create Function to create heatmaps for specific genera
+
+GenusDataPrep <- function(Function,Database) {
+  df <- amp_subset_taxa(Database, tax_vector = Function, normalise = TRUE)
+  
+  df2 <- amp_heatmap(df,
+                     group_by = "Day",
+                     tax_aggregate = "Genus",tax_add = "Phylum",
+                     measure = "max",
+                     tax_show = 4,
+                     showRemainingTaxa = T,
+                     tax_empty ="remove",
+                     normalise = F,
+                     textmap = TRUE)
+  
+  df3 <- df2 %>%
+    mutate(Genus = rownames(df2)) %>%
+    gather(1:length(unique(df$metadata$Day)), key="Day", value="RA") %>%
+    mutate(Genus = fct_reorder(Genus, RA, mean)) %>%
+    mutate(Genus = fct_relevel(Genus, grep("Remaining taxa", Genus, value = TRUE)[1]))
+  df3
+}
+
+
+df1 <- GenusDataPrep(PAOs,Data_Bio1)
+df2 <- GenusDataPrep(GAOs,Data_Bio1)
+df3 <- GenusDataPrep(FB,Data_Bio1)
+
+
+
+Heatmap <- function(df) {
+  p <- ggplot(df, aes(Datum, Genus)) +
+    geom_tile(aes(fill = RA)) + 
+    geom_text(aes(label = round(RA, 1))) +
+    theme_bw() +
+    theme(axis.title.y = element_blank()) +
+    theme(axis.title.x = element_blank()) +
+    theme(axis.text.x = element_text(angle = 90, vjust=1, hjust=1)) +
+    scale_fill_gradient(low="white", high="red")
+  p}
+
+
+p1a <- Heatmap(df1) + theme(axis.text.x = element_blank(), legend.position = "none")+ggtitle("PAOs")
+p1b <- Heatmap(df2) + theme(axis.text.x = element_blank(), legend.position = "none")+ggtitle("GAOs")
+p1c <- Heatmap (df3) + ggtitle("Filaments")
+p1 <-  p1a + p1b + p1c + plot_layout(ncol=1,heights=c(10,16,7.5,10)) 
+p1
+
+
+### Filaments
+
+df5 <- GenusDataPrep(FB, Data_Bio1)
+class(df5)
+p2 <- Heatmap(df5)+ggtitle("Filaments")
+p2
+
+
+
+fil <-amp_subset_taxa(Data_LabScale, tax_vector =  c("Acinetobacter",
+                                            "Leptothrix",
+                                            "Nocardioides",
+                                            "Ca_Alysiosphaera",
+                                            "Anaerolinea",
+                                            "Beggiatoa",
+                                            "Ca_Amarolinea",
+                                            "Ca_Microthrix",
+                                            "Ca_Nostocoida",
+                                            "Ca_Promineofilum",
+                                            "Ca_Sarcinithrix",
+                                            "Ca_Villigracilis",
+                                            "Fodinicola",
+                                            "Gordonia",
+                                            "Haliscomenobacter",
+                                            "Kouleothrix",
+                                            "Leucothrix",
+                                            "Neomegalonema",
+                                            "Skermania",
+                                            "Sphaerotilus",
+                                            "Thiothrix",
+                                            "Turicibacter",
+                                            "Trichococcus",
+                                            "Collinsella",
+                                            "Streptococcus",
+                                            "Lactococcus",
+                                            "Dietzia",
+                                            "Mycobacterium",
+                                            "Ca_Defluviicoccus_seviourii",
+                                            "midas_s_328",
+                                            "midas_g_105",
+                                            "midas_g_344",
+                                            "midas_g_1668",
+                                            "midas_g_2111"), normalise=T)
+amp_heatmap(
+  fil, 
+  group_by = "Datum",
+  facet_by = "Reactor",
+  tax_aggregate = "Genus",
+  tax_show = 5,
+  normalise = F,
+  showRemainingTaxa = TRUE,
+  tax_empty = "remove")
+
+GAOs <- amp_subset_taxa(Data_Startup, tax_vector =  c("Ca_Competibacter","Defluviicoccus","Propionivibrio","Micropruina"), normalise=T)
+amp_heatmap(
+  GAOs, 
+  group_by = "Day",
+  facet_by = "Reactor",
+  tax_aggregate = "Genus",
+  tax_show = 5,
+  normalise = F,
+  showRemainingTaxa = TRUE,
+  tax_empty = "remove")
+
+#Heat maps top 20-30 organismen
+
+h1 <- amp_heatmap(Data_Bio1,group_by = "Day",
+                  facet_by= "Reactor",
+                  tax_aggregate = "Genus",
+                  tax_add = "Phylum",
+                  tax_show = 20,plot_values_size = 2.5 ,plot_functions = T,
+                  function_data = midasfunctions_20201201,
+                  functions = c( "Filamentous", "AOB", "NOB", "PAO", "GAO"))
+h1
+h2 <- amp_heatmap(Data_Bio2,group_by = "Day",
+                  facet_by= "Reactor",
+                  tax_aggregate = "Genus",
+                  tax_add = "Phylum",
+                  tax_show = 20,plot_values_size = 2,plot_functions = T,
+                  function_data = midasfunctions_20201201,
+                  functions = c( "Filamentous", "AOB", "NOB", "PAO", "GAO"))
+h2
+h3 <- h1 + h2
+h3
+
+
+#PCA
+
+amp_ordinate(Data_Startup,
+             type = "PCA",
+             transform = "hellinger",
+             sample_color_by = "Reactor",
+             sample_colorframe = TRUE,
+             sample_colorframe_label = "Day",
+             sample_colorframe_label_size = 2
+             
+)
+
+
+# Box plot abundant species
+
+box <- amp_boxplot(Data_LabScale,
+                   normalise = TRUE,
+                   group_by = c("Datum"),
+                   tax_aggregate = "Genus", tax_add = "Phylum",
+                   #tax_add = c("Family","Genus"),
+                   tax_show = 20
+) +
+  scale_y_log10(breaks = c(0.1, 1.0, 10))
+box
+
+
+#Barchart Bio1: first create function to plot
+df1 <- GenusDataPrep(PAOs,Data_Bio1)
+df2 <- GenusDataPrep(GAOs,Data_Bio1)
+df3 <- GenusDataPrep(FB,Data_Bio1)
+
+
+BarGraph <- function (KS) {level_order <- c("0", "7","14","20","29","49","61","84","111","140","175","229","252")
+(p <- ggplot( data = KS, aes(factor(Day,level = level_order), y = RA, fill = Genus))+ 
+    geom_bar(stat="identity") + theme_bw() +
+    labs ( x= "", y = "Relative abundance %"))} #scale_fill_manual(values = c("7", "23","38","66","73","88","105","119","127","140","155","169","184","206","218","228")) }  
+
+k1a <- BarGraph(df1) +theme(axis.text.x = element_blank())+ ggtitle("PAOs")
+k1b <- BarGraph(df2) +theme(axis.text.x = element_blank())+ggtitle("GAOs")
+k1c <- BarGraph (df3) + ggtitle("Filaments")
+k1 <-  k1a + k1b + k1c + plot_layout(ncol=1,heights=c(10,16,7.5,10))
+k1
+
+#Barchart Bio2: first create function to plot
+df1 <- GenusDataPrep(PAOs,Data_Bio2)
+df2 <- GenusDataPrep(GAOs,Data_Bio2)
+df3 <- GenusDataPrep(FB,Data_Bio2)
+
+BarGraph <- function (KS) {level_order <- c("0","14","20","29","42","49","61","75","97","111","140","175","252")
+(p <- ggplot( data = KS, aes(factor(Day,level = level_order), y = RA, fill = Genus))+ 
+    geom_bar(stat="identity") + theme_bw() +
+    labs ( x= "", y = "Relative abundance %"))} #scale_fill_manual(values = c("7", "23","38","66","73","88","105","119","127","140","155","169","184","206","218","228")) }  
+
+k1a <- BarGraph(df1) +theme(axis.text.x = element_blank())+ ggtitle("PAOs")
+k1b <- BarGraph(df2) +theme(axis.text.x = element_blank())+ggtitle("GAOs")
+k1c <- BarGraph (df3) + ggtitle("Filaments")
+k1 <-  k1a + k1b + k1c + plot_layout(ncol=1,heights=c(10,16,7.5,10))
+k1
+
+amp_timeseries(Data_FS,
+               time_variable = "Day",
+               group_by = "Reactor",
+               split = TRUE,
+               scales = "free_y",
+               tax_show = 9,
+               tax_aggregate = "Genus",
+               tax_add = "Phylum"
+)
+
+
